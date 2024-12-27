@@ -18,7 +18,7 @@ class TrainService:
     deceleration: float
     priority: int
     min_dwell_time: float = 0.0
-    max_dwell_time: float = 5.0
+    max_dwell_time: float = 10.0
 
     @classmethod
     def create_dummy_passenger_train(cls, direction: Direction) -> 'TrainService':
@@ -47,7 +47,7 @@ class TrainService:
             deceleration=0.2,
             priority=2,
             min_dwell_time=2.0,
-            max_dwell_time=5.0
+            max_dwell_time=10.0
         )
 
 @dataclass
@@ -56,6 +56,7 @@ class TrainPath:
     schedule: List[tuple[str, datetime, float]]  # section_id, time, dwell_time
     speeds: List[float]
     platforms: List[str]
+    
     
     @property
     def start_time(self) -> datetime:
@@ -66,3 +67,17 @@ class TrainPath:
         last_time = self.schedule[-1][1]
         last_dwell = self.schedule[-1][2]
         return last_time + timedelta(minutes=last_dwell)
+    
+    def calculate_journey_time(self) -> float:
+        """Calculate total journey time in minutes including dwells"""
+        start_time = self.schedule[0][1]
+        final_time = self.schedule[-1][1]
+        final_dwell = self.schedule[-1][2]
+        
+        total_minutes = (final_time - start_time).total_seconds() / 60
+        return total_minutes + final_dwell
+
+    def calculate_pure_running_time(self) -> float:
+        """Calculate running time without dwells"""
+        return self.calculate_journey_time() - sum(dwell for _, _, dwell in self.schedule)
+    

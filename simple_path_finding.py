@@ -62,16 +62,27 @@ def main():
     # Find best path
     start_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
     print(f"\nFinding best path starting at {start_time.strftime('%H:%M')}")
-    best_path = path_finder.find_best_path(freight_train, start_time, existing_paths)
-    
+    # Find paths
+    # After finding the best path
+    best_path, alternative_paths = path_finder.find_best_path(freight_train, start_time, existing_paths)
+
     if best_path:
         print("\nFound optimal path for freight train:")
+        print(f"Total journey time: {best_path.calculate_journey_time():.1f} minutes")
+        print(f"Number of alternative paths: {len(alternative_paths)}")
+        
         for section, time, dwell in best_path.schedule:
             print(f"Section {section}: {time.strftime('%H:%M')} (Dwell: {dwell:.1f} min)")
         
-        # Visualize result
+        # Print alternative path times
+        if alternative_paths:
+            print("\nAlternative path journey times:")
+            for i, path in enumerate(alternative_paths, 1):
+                print(f"Alternative {i}: {path.calculate_journey_time():.1f} minutes")
+        
+        # Visualize
         viz = TimeSpaceDiagram(infrastructure.sections)
-        fig = viz.create_diagram(existing_paths, best_path)
+        fig = viz.create_diagram(existing_paths, best_path, alternative_paths)
         fig.show()
     else:
         print("\nNo feasible path found.")

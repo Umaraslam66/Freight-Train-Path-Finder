@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 import random
 from ..models.core.train import TrainPath, TrainService
@@ -6,13 +6,14 @@ from ..models.core.infrastructure import Infrastructure, Direction
 from .conflict_checker import ConflictChecker
 from ..models.ml.path_success_predictor import PathSuccessPredictor
 from ..models.ml.congestion_analyzer import CongestionAnalyzer
+import numpy as np
+
 
 class PathFinder:
     def __init__(self, 
                  infrastructure,
                  success_predictor,
                  congestion_analyzer):
-        """Initialize PathFinder with required components"""
         self.infrastructure = infrastructure
         self.success_predictor = success_predictor
         self.congestion_analyzer = congestion_analyzer
@@ -22,10 +23,9 @@ class PathFinder:
         """Check if the new path crosses any existing paths in the opposite direction"""
         print(f"\nChecking path crossing for train {new_path.train.id}")
         for existing_path in existing_paths:
-            # Only check paths in opposite direction
             if new_path.train.direction != existing_path.train.direction:
                 new_times = [t for _, t, _ in new_path.schedule]
-                new_sections = [s.split('_')[0] for s, _, _ in new_path.schedule]  # Remove UP/DOWN suffix
+                new_sections = [s.split('_')[0] for s, _, _ in new_path.schedule]
                 
                 existing_times = [t for _, t, _ in existing_path.schedule]
                 existing_sections = [s.split('_')[0] for s, _, _ in existing_path.schedule]
@@ -34,113 +34,134 @@ class PathFinder:
                 print(f"New path sections: {new_sections}")
                 print(f"Existing path sections: {existing_sections}")
                 
-                # Check for crossings
                 for i in range(len(new_sections) - 1):
                     for j in range(len(existing_sections) - 1):
                         if (new_sections[i] == existing_sections[j]):
-                            # Same section, check times
                             if (min(new_times[i+1], existing_times[j+1]) > 
                                 max(new_times[i], existing_times[j])):
                                 print(f"Found crossing at section {new_sections[i]}")
                                 return True
         return False
 
-    def generate_candidate_paths(self, 
-                           train: TrainService,
-                           start_time: datetime,
-                           existing_paths: List[TrainPath],
-                           num_candidates: int = 5) -> List[TrainPath]:
-        """Generate candidate paths considering direction and dwell times"""
-        print(f"\nGenerating candidate paths for train {train.id} - Direction: {train.direction.value}")
-        candidates = []
-        time_step = 10
-        attempts = 0
-        max_attempts = 20
+    def _find_time_windows(self, 
+                      existing_paths: List[TrainPath], 
+                      direction: Direction,
+                      target_start_time: datetime) -> List[Tuple[datetime, datetime]]:
+        """Find potential start times for new train"""
+        # Just return a single window around the target start time
+        return [(target_start_time, target_start_time + timedelta(minutes=1))]
+
+    def generate_all_feasible_paths(self, 
+                              train: TrainService,
+                              start_time: datetime,
+                              existing_paths: List[TrainPath],
+                              max_paths: int = 50) -> List[TrainPath]:  # Increased max paths
+        """Generate feasible paths with varying speeds and dwell times"""
+        print(f"\nGenerating feasible paths for train {train.id} - Direction: {train.direction.value}")
         
-        while len(candidates) < num_candidates and attempts < max_attempts:
-            departure_time = start_time + timedelta(minutes=time_step * attempts)
-            print(f"\nAttempt {attempts + 1} with departure time {departure_time.strftime('%H:%M')}")
-            
-            # Get sections for the correct direction
-            direction_suffix = "_UP" if train.direction == Direction.UP else "_DOWN"
-            
-            # Fix the section ordering based on direction
-            if train.direction == Direction.UP:
-                # For UP trains: Start at A, go through B, end at C
-                section_order = ["SEC1", "SEC2", "SEC3"]
-            else:
-                # For DOWN trains: Start at C, go through B, end at A
-                section_order = ["SEC3", "SEC2", "SEC1"]
-            
-            # Create sections list with direction suffix
-            relevant_sections = [f"{sec}{direction_suffix}" for sec in section_order]
-            print(f"Section sequence: {relevant_sections}")
+        feasible_paths = []
+        attempts = 0
+        max_attempts = 200  # Increased attempts
+
+        direction_suffix = "_UP" if train.direction == Direction.UP else "_DOWN"
+        section_order = (["SEC1", "SEC2", "SEC3"] if train.direction == Direction.UP 
+                        else ["SEC3", "SEC2", "SEC1"])
+
+        while attempts < max_attempts and len(feasible_paths) < max_paths:
+            # Random departure time between 7:20 and 7:25
+            minutes_offset = random.uniform(0, 5)
+            departure_time = start_time.replace(hour=7, minute=20) + timedelta(minutes=minutes_offset)
             
             schedule = []
             platforms = []
             current_time = departure_time
             
-            for section_id in relevant_sections:
+            # Generate random speed factor (0.6 to 1.0 of max speed)
+            speed_factor = random.uniform(0.6, 1.0)
+            
+            # Generate different dwell times for each section
+            dwell_times = [
+                random.uniform(train.min_dwell_time, train.max_dwell_time * 1.5)
+                for _ in range(3)
+            ]
+            
+            print(f"\nAttempt {attempts + 1}")
+            print(f"Departure: {departure_time.strftime('%H:%M:%S')}")
+            print(f"Speed factor: {speed_factor:.2f}")
+            print(f"Dwell times: {[f'{t:.1f}' for t in dwell_times]} minutes")
+            
+            for idx, section_id in enumerate([f"{sec}{direction_suffix}" for sec in section_order]):
                 section = self.infrastructure.sections[section_id]
-                # Calculate running time
-                speed = min(train.max_speed, section.max_speed)
-                running_time = (section.length / speed) * 60
                 
-                # Calculate dwell time if platform exists
-                dwell_time = 0.0
-                if section.has_platforms:
-                    dwell_time = random.uniform(train.min_dwell_time, train.max_dwell_time)
-                    platform = random.choice(section.platforms)
-                    platforms.append(platform)
-                else:
-                    platforms.append("")
+                # Variable speed for each section
+                max_speed = min(train.max_speed, section.max_speed)
+                actual_speed = max_speed * speed_factor
+                running_time = (section.length / actual_speed) * 60
+                
+                dwell_time = dwell_times[idx] if section.has_platforms else 0.0
                 
                 schedule.append((section_id, current_time, dwell_time))
-                current_time += timedelta(minutes=int(running_time + dwell_time))
-                print(f"Added section {section_id} at {current_time.strftime('%H:%M')}")
+                platforms.append(random.choice(section.platforms) if section.has_platforms else "")
+                
+                current_time += timedelta(minutes=running_time + dwell_time)
+                print(f"  {section_id}: {schedule[-1][1].strftime('%H:%M:%S')} -> "
+                    f"{current_time.strftime('%H:%M:%S')} "
+                    f"(Speed: {actual_speed:.1f} km/h, Dwell: {dwell_time:.1f} min)")
             
-            # Create path
-            speeds = [min(train.max_speed, self.infrastructure.sections[s].max_speed) 
+            speeds = [min(train.max_speed, self.infrastructure.sections[s].max_speed) * speed_factor 
                     for s, _, _ in schedule]
             
             candidate_path = TrainPath(train, schedule, speeds, platforms)
             
-            if not self._is_path_crossing(candidate_path, existing_paths):
-                print(f"Found valid path with departure {departure_time.strftime('%H:%M')}")
-                candidates.append(candidate_path)
+            if (not self._is_path_crossing(candidate_path, existing_paths) and 
+                not self.conflict_checker.check_conflicts(candidate_path, existing_paths)):
+                journey_time = candidate_path.calculate_journey_time()
+                print(f"\nFound valid path!")
+                print(f"Total journey time: {journey_time:.1f} minutes")
+                print(f"Average speed: {np.mean(speeds):.1f} km/h")
+                print(f"Total dwell time: {sum(dwell_times):.1f} minutes")
+                feasible_paths.append(candidate_path)
+            else:
+                print("  Path has conflicts")
             
             attempts += 1
         
-        print(f"\nGenerated {len(candidates)} valid paths out of {attempts} attempts")
-        return candidates
+        print(f"\nGenerated {len(feasible_paths)} valid paths out of {attempts} attempts")
+        
+        # Sort paths by journey time
+        feasible_paths.sort(key=lambda p: p.calculate_journey_time())
+        
+        print("\nFeasible paths summary:")
+        for i, path in enumerate(feasible_paths, 1):
+            journey_time = path.calculate_journey_time()
+            total_dwell = sum(dwell for _, _, dwell in path.schedule)
+            avg_speed = np.mean([min(train.max_speed, self.infrastructure.sections[s].max_speed) * speed_factor 
+                            for s, _, _ in path.schedule])
+            print(f"Path {i}:")
+            print(f"  Departure: {path.schedule[0][1].strftime('%H:%M:%S')}")
+            print(f"  Journey time: {journey_time:.1f} minutes")
+            print(f"  Total dwell: {total_dwell:.1f} minutes")
+            print(f"  Average speed: {avg_speed:.1f} km/h")
+        
+        return feasible_paths
 
     def find_best_path(self, 
                       train: TrainService,
                       start_time: datetime,
-                      existing_paths: List[TrainPath]) -> Optional[TrainPath]:
-        """Find the best path for a train"""
-        candidates = self.generate_candidate_paths(train, start_time, existing_paths)
+                      existing_paths: List[TrainPath]) -> Tuple[TrainPath, List[TrainPath]]:
+        """Find best path and return all feasible alternatives"""
+        feasible_paths = self.generate_all_feasible_paths(train, start_time, existing_paths)
         
-        if not candidates:
-            return None
-            
-        best_path = None
-        best_score = -1
+        if not feasible_paths:
+            return None, []
         
-        print("\nEvaluating candidate paths:")
-        for path in candidates:
-            # Check conflicts
-            conflicts = self.conflict_checker.check_conflicts(path, existing_paths)
-            if not conflicts:
-                # Predict success probability
-                success_prob = self.success_predictor.predict_success_probability(path)
-                print(f"Path starting at {path.schedule[0][1].strftime('%H:%M')} has success probability {success_prob:.2f}")
-                
-                if success_prob > best_score:
-                    best_score = success_prob
-                    best_path = path
+        # Sort paths by journey time
+        sorted_paths = sorted(feasible_paths, key=lambda p: p.calculate_journey_time())
+        print("\nFeasible paths found (sorted by journey time):")
+        for i, path in enumerate(sorted_paths, 1):
+            journey_time = path.calculate_journey_time()
+            dwell_time = sum(dwell for _, _, dwell in path.schedule)
+            print(f"Path {i}: Journey time = {journey_time:.1f} min, "
+                  f"Total dwell = {dwell_time:.1f} min")
         
-        if best_path:
-            print(f"\nSelected best path with success probability {best_score:.2f}")
-        
-        return best_path
+        return sorted_paths[0], sorted_paths[1:]
