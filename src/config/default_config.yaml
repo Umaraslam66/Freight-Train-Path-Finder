@@ -1,0 +1,18 @@
+ml_parameters:
+  clustering_eps: 0.3
+  min_samples: 2
+  prediction_threshold: 0.7
+optimization:
+  convergence_threshold: 0.001
+  max_iterations: 1000
+paths:
+  data_dir: data/
+  model_dir: models/
+  output_dir: output/
+visualization:
+  color_scheme:
+    conflicts: '#d62728'
+    freight_trains: '#ff7f0e'
+    passenger_trains: '#1f77b4'
+  default_height: 800
+  default_width: 1200
