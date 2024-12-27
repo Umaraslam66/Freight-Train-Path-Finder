@@ -8,7 +8,6 @@ from ..models.ml.path_success_predictor import PathSuccessPredictor
 from ..models.ml.congestion_analyzer import CongestionAnalyzer
 import numpy as np
 
-
 class PathFinder:
     def __init__(self, 
                  infrastructure,
